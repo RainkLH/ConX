@@ -1,0 +1,212 @@
+@using ConX.Models
+@inject HttpClient Http
+
+<div class="process-shell">
+    <div class="process-hero">
+        <div class="process-hero__text">
+            <p class="eyebrow">System Monitor</p>
+            <h2>进程管理</h2>
+            <p class="muted">实时查看 CPU / 内存占用，筛选并终止可疑进程。</p>
+            <div class="hero-chips">
+                <span class="chip">总计 @_processes.Count</span>
+                @if (_autoRefresh)
+                {
+                    <span class="chip success">自动刷新 @_intervalSec s</span>
+                }
+            </div>
+        </div>
+        <div class="process-hero__actions">
+            <button class="btn primary glossy" @onclick="Refresh">刷新</button>
+            <label class="toggle pill">
+                <input type="checkbox" @bind="AutoRefresh" />
+                <span>自动刷新</span>
+            </label>
+            <label class="input-inline filled">
+                <span>间隔(秒)</span>
+                <input class="input numeric" type="number" @bind="_intervalSec" min="1" />
+            </label>
+            <input class="input search bright" placeholder="筛选 ProcessName / CommandLine" @bind="_filter" />
+        </div>
+    </div>
+
+    <div class="process-card">
+        <div class="process-card__header">
+            <div>
+                <h3 class="process-card__title">进程列表</h3>
+                <p class="process-card__subtitle">按 CPU 占用排序，点击终止即可快速处置。</p>
+            </div>
+            <div class="process-card__stats">
+                <div class="stat-chip">总计 <strong>@_processes.Count</strong></div>
+                @if (_autoRefresh)
+                {
+                    <div class="stat-chip success">自动刷新中 · @(_intervalSec)s</div>
+                }
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_errorMessage))
+        {
+            <div class="alert error">@_errorMessage</div>
+        }
+
+        <div class="table-wrapper">
+            <table class="process-table fixed">
+                <thead>
+                    <tr>
+                        <th class="col-pid">PID</th>
+                        <th class="col-name">进程名</th>
+                        <th class="col-thread">线程</th>
+                        <th class="col-cpu">CPU%</th>
+                        <th class="col-mem">内存</th>
+                        <th class="col-cmd">命令行</th>
+                        <th class="col-status">状态</th>
+                        <th class="col-action">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (_processes.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="9" class="empty">暂无数据</td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var p in _processes)
+                        {
+                            <tr>
+                                <td title="@p.ProcessId">@p.ProcessId</td>
+                                <td title="@p.ProcessName">@p.ProcessName</td>
+                                <td>@p.ThreadCount</td>
+                                <td>
+                                    <span class="badge cpu">@p.CpuPercent</span>
+                                </td>
+                                <td>@(FormatBytes(p.MemoryBytes))</td>
+                                <td title="@p.CommandLine">@Shorten(p.CommandLine, 80)</td>
+                                <td>
+                                    <span class="badge @(p.Status == "Running" ? "success" : "warning")">@p.Status</span>
+                                    @if (p.IsAssociated)
+                                    {
+                                        <span class="badge link" title="关联终端">关联 @p.AssociatedTabId</span>
+                                    }
+                                </td>
+                                <td>
+                                    <button class="btn danger" @onclick="() => Kill(p.ProcessId)" disabled="@(p.IsAssociated)">终止</button>
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<ProcessInfo> _processes = new();
+    private bool _autoRefresh = false;
+    private int _intervalSec = 10;
+    private string _filter = string.Empty;
+    private System.Threading.Timer? _timer;
+    private string? _errorMessage;
+
+    // Property wrapper so we can run logic when the checkbox value changes
+    private bool AutoRefresh
+    {
+        get => _autoRefresh;
+        set
+        {
+            if (_autoRefresh == value) return;
+            _autoRefresh = value;
+            if (_autoRefresh)
+            {
+                StartTimer();
+            }
+            else
+            {
+                StopTimer();
+            }
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Refresh();
+    }
+
+    private async Task Refresh()
+    {
+        _errorMessage = null;
+        try
+        {
+            var url = $"/api/processes?filter={Uri.EscapeDataString(_filter ?? string.Empty)}";
+            var res = await Http.GetFromJsonAsync<List<ProcessInfo>>(url);
+            if (res != null)
+            {
+                _processes = res;                
+            }
+            else
+            {
+                _errorMessage = $"加载失败";
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex.Message);
+            _errorMessage = ex.Message;
+        }
+        StateHasChanged();
+    }
+
+    private async Task Kill(int pid)
+    {
+        if (!await JsConfirmAsync($"确定要终止进程 {pid} 吗？")) return;
+        var dto = new { reason = "admin_action" };
+        var resp = await Http.PostAsJsonAsync($"/api/processes/{pid}/kill", dto);
+        if (resp.IsSuccessStatusCode)
+        {
+            await Refresh();
+        }
+        else
+        {
+            var txt = await resp.Content.ReadAsStringAsync();
+            await JsAlertAsync($"终止失败: {txt}");
+        }
+    }
+
+    private string Shorten(string s, int max)
+    {
+        if (string.IsNullOrEmpty(s)) return string.Empty;
+        if (s.Length <= max) return s;
+        return s.Substring(0, max - 3) + "...";
+    }
+
+    private string FormatBytes(long b)
+    {
+        if (b < 1024) return b + " B";
+        if (b < 1024 * 1024) return Math.Round(b / 1024.0, 1) + " KB";
+        if (b < 1024 * 1024 * 1024) return Math.Round(b / (1024.0 * 1024.0), 1) + " MB";
+        return Math.Round(b / (1024.0 * 1024.0 * 1024.0), 2) + " GB";
+    }
+
+    // simple JS alerts / confirms using browser
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+    private async Task<bool> JsConfirmAsync(string msg) => await JS.InvokeAsync<bool>("confirm", msg);
+    private async Task JsAlertAsync(string msg) => await JS.InvokeVoidAsync("alert", msg);
+
+    private void StartTimer()
+    {
+        StopTimer();
+        _timer = new System.Threading.Timer(async _ => await InvokeAsync(async () => await Refresh()), null, TimeSpan.FromSeconds(_intervalSec), TimeSpan.FromSeconds(_intervalSec));
+    }
+
+    private void StopTimer()
+    {
+        try { _timer?.Dispose(); _timer = null; } catch { }
+    }
+
+    public void Dispose()
+    {
+        StopTimer();
+    }
+}

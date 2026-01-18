@@ -1,0 +1,14 @@
+<CascadingAuthenticationState>
+    <Router AppAssembly="@typeof(Program).Assembly">
+        <Found Context="routeData">
+            <AuthorizeRouteView RouteData="@routeData" DefaultLayout="typeof(ConX.Pages.Shared.MainLayout)">
+                <NotAuthorized>
+                    <ConX.Pages.Shared.RedirectToLogin />
+                </NotAuthorized>
+            </AuthorizeRouteView>
+        </Found>
+        <NotFound>
+            <p>页面未找到</p>
+        </NotFound>
+    </Router>
+</CascadingAuthenticationState>

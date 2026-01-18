@@ -1,0 +1,28 @@
+@page "/"
+@using ConX.Pages.Components
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthStateProvider
+
+@code {
+    private bool _isAuthChecked = false;
+    private bool _isAuthenticated = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var st = await AuthStateProvider.GetAuthenticationStateAsync();
+        _isAuthenticated = st.User?.Identity?.IsAuthenticated ?? false;
+        _isAuthChecked = true;
+        if (!_isAuthenticated)
+        {
+            // force full reload to ensure cookie flow is correct
+            Navigation.NavigateTo("/login", true);
+        }
+    }
+}
+
+@if (_isAuthChecked && _isAuthenticated)
+{
+    <h3>进程管理</h3>
+    <ProcessList />
+}
+

@@ -1,0 +1,180 @@
+@page "/terminal"
+@inject ConX.Services.TerminalManager TerminalManager
+@inject NavigationManager Navigation
+@using Microsoft.AspNetCore.SignalR.Client
+
+<div class="terminal-page">
+    <div class="terminal-header">
+        <h3>⌨️ 终端</h3>
+        <p class="terminal-subtitle">实时命令执行、进程管理和系统交互</p>
+    </div>
+    
+    <div class="tabs-bar">
+        @foreach(var t in _tabs)
+        {
+            <button class="tab-button @(t.TabId == _tabId ? "active" : "")" @onclick="() => ActivateTab(t.TabId)">
+                @t.Type (@t.SystemProcessId)
+                <span class="close" @onclick="@(e => CloseTab(e, t.TabId))">×</span>
+            </button>
+        }
+        <button class="new-tab" @onclick="CreateTab">＋ 新建 PowerShell</button>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_tabId))
+    {
+        <div class="terminal-view">
+            <div class="output-area">
+                @foreach (var line in _outputs)
+                {
+                    <div>@line</div>
+                }
+            </div>
+            <div class="input-area">
+                <input @bind="_command" @onkeydown="HandleKeyDown" placeholder="输入命令并回车执行..." />
+                <button @onclick="SendCommand">发送</button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="terminal-empty">
+            <p>📭 没有打开的终端</p>
+            <p class="empty-hint">点击"新建 PowerShell"按钮创建终端会话</p>
+        </div>
+    }
+</div>
+
+<style>
+    .terminal-page {
+        padding: 0;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .terminal-header {
+        padding: 16px 24px;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    
+    .terminal-header h3 {
+        margin: 0 0 4px;
+        font-size: 24px;
+    }
+    
+    .terminal-subtitle {
+        margin: 0;
+        color: #9ca3af;
+        font-size: 13px;
+    }
+    
+    .terminal-empty {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: #9ca3af;
+        font-size: 14px;
+    }
+    
+    .empty-hint {
+        color: #6b7280;
+        font-size: 12px;
+    }
+</style>
+
+@code{
+    private string _tabId = string.Empty;
+    private HubConnection? _hub;
+    private string _circuitId = "demoCircuit";
+    private List<string> _outputs = new();
+    private string _command = string.Empty;
+    private List<TerminalTab> _tabs = new();
+
+    protected override void OnInitialized()
+    {
+        RefreshTabs();
+    }
+
+    private void RefreshTabs()
+    {
+        _tabs = TerminalManager.GetTabsBySession("demoUser", _circuitId);
+        StateHasChanged();
+    }
+
+    private async Task CreateTab()
+    {
+        var tab = TerminalManager.CreateTab("demoUser", _circuitId, "PowerShell");
+        RefreshTabs();
+        await ActivateTab(tab.TabId);
+    }
+
+    private async Task ActivateTab(string tabId)
+    {
+        _tabId = tabId;
+        _outputs.Clear();
+
+        // Ensure SignalR connection
+        if (_hub == null)
+        {
+            _hub = new HubConnectionBuilder().WithUrl(Navigation.ToAbsoluteUri("/terminalhub")).Build();
+            _hub.On<string, string>("TerminalOutput", (tabIdFromHub, data) => {
+                if (tabIdFromHub == _tabId)
+                {
+                    _outputs.Add(data);
+                    InvokeAsync(StateHasChanged);
+                }
+            });
+            await _hub.StartAsync();
+            await _hub.SendAsync("JoinCircuitGroup", _circuitId);
+        }
+
+        // Pull buffered snapshot and immediate queue
+        var buffered = TerminalManager.GetBufferedOutput("demoUser", _circuitId, _tabId, 2000);
+        foreach (var o in buffered) _outputs.Add(o);
+        var outputs = TerminalManager.PollOutputs("demoUser", _circuitId, _tabId);
+        foreach (var o in outputs) _outputs.Add(o);
+        // bound the list
+        if (_outputs.Count > 20000) _outputs = _outputs.Skip(_outputs.Count - 20000).ToList();
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task CloseTab(MouseEventArgs e, string tabId)
+    {
+        // default: terminate underlying process
+        var removed = TerminalManager.RemoveTab("demoUser", _circuitId, tabId, true);
+        RefreshTabs();
+        if (_tabId == tabId)
+        {
+            // activate another tab if any
+            var next = _tabs.FirstOrDefault();
+            if (next != null) await ActivateTab(next.TabId);
+            else
+            {
+                _tabId = string.Empty;
+                _outputs.Clear();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private async Task SendCommand()
+    {
+        if (string.IsNullOrWhiteSpace(_command) || string.IsNullOrEmpty(_tabId)) return;
+        var cmd = _command;
+        _command = string.Empty;
+        var cmdId = TerminalManager.SendCommand("demoUser", _circuitId, _tabId, cmd);
+        if (cmdId == null)
+        {
+            _outputs.Add("[Error] 发送命令失败");
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await SendCommand();
+    }
+}

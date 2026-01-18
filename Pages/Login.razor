@@ -1,0 +1,173 @@
+@page "/login"
+@layout EmptyLayout
+@inject HttpClient Http
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@using System.Net.Http.Json
+
+<div class="login-container">
+    <div class="login-box">
+        <h1>🔹🔷ConX🔷🔹</h1>
+        <h5>Windows远程控制台</h5>
+        <h3>🔐 登录</h3>
+        <input @bind="_user" placeholder="用户名" />
+        <input type="password" @bind="_pwd" placeholder="密码" />
+        <div class="actions">
+            <button @onclick="DoLogin" disabled="@_isSubmitting">@(_isSubmitting ? "正在登录..." : "登录")</button>
+            <button class="secondary" @onclick="OpenRegister" disabled="@_isSubmitting">注册</button>
+        </div>
+        @if (!string.IsNullOrEmpty(_errorMessage))
+        {
+            <div class="error">@_errorMessage</div>
+        }
+    </div>
+</div>
+
+@if (_showRegister)
+{
+    <div class="modal-backdrop">
+        <div class="modal">
+            <h4>注册新用户</h4>
+            <input @bind="_registerUser" placeholder="用户名" />
+            <input type="password" @bind="_registerPwd" placeholder="密码" />
+            <input type="password" @bind="_registerPwdConfirm" placeholder="确认密码" />
+            @if (!string.IsNullOrEmpty(_registerError))
+            {
+                <div class="error">@_registerError</div>
+            }
+            <div class="actions">
+                <button @onclick="ConfirmRegister">确认</button>
+                <button class="secondary" @onclick="CloseRegister">取消</button>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .login-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        background: radial-gradient(circle at 20% 20%, rgba(56,189,248,0.22), transparent 25%), 
+                    radial-gradient(circle at 80% 0%, rgba(167,139,250,0.25), transparent 30%), 
+                    linear-gradient(135deg, #0b1224 0%, #0f172a 55%, #111827 100%);
+    }
+    .actions { display:flex; gap:12px; margin-top:8px; }
+    .secondary { background:#444; color:#fff; }
+    .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.55); display:flex; align-items:center; justify-content:center; }
+    .modal { background:#111827; padding:20px; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,0.3); width:320px; display:flex; flex-direction:column; gap:10px; }
+    .modal input { width:100%; }
+</style>
+
+@code{
+    private string _user = string.Empty;
+    private string _pwd = string.Empty;
+    private bool _isSubmitting = false;
+    private string _errorMessage = string.Empty;
+
+    private bool _showRegister = false;
+    private string _registerUser = string.Empty;
+    private string _registerPwd = string.Empty;
+    private string _registerPwdConfirm = string.Empty;
+    private string _registerError = string.Empty;
+
+    private async Task DoLogin()
+    {
+        if (_isSubmitting) return;
+        _isSubmitting = true;
+        _errorMessage = string.Empty;
+        try
+        {
+            // Use browser fetch via JS runtime to ensure cookies set by SignInAsync are stored
+            var result = await JS.InvokeAsync<System.Text.Json.JsonElement>("conx.login", "/api/auth/login", _user, _pwd);
+            if (result.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                if (result.TryGetProperty("ok", out var okProp) && okProp.GetBoolean())
+                {
+                    Navigation.NavigateTo("/", true);
+                }
+                else if (result.TryGetProperty("status", out var statusProp) && statusProp.GetInt32() == 401)
+                {
+                    _errorMessage = "用户名或密码错误";
+                }
+                else
+                {
+                    _errorMessage = "登录失败，请稍后重试。";
+                }
+            }
+            else
+            {
+                _errorMessage = "登录失败，请稍后重试。";
+            }
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = "登录时发生错误，请稍后重试。";
+            Console.WriteLine(ex);
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private void OpenRegister()
+    {
+        _registerError = string.Empty;
+        _showRegister = true;
+    }
+
+    private void CloseRegister()
+    {
+        _showRegister = false;
+        _registerUser = _registerPwd = _registerPwdConfirm = string.Empty;
+    }
+
+    private async Task ConfirmRegister()
+    {
+        _registerError = string.Empty;
+        if (string.IsNullOrWhiteSpace(_registerUser) || string.IsNullOrWhiteSpace(_registerPwd))
+        {
+            _registerError = "用户名和密码不能为空";
+            return;
+        }
+        if (_registerPwd != _registerPwdConfirm)
+        {
+            _registerError = "两次输入的密码不一致";
+            return;
+        }
+
+        try
+        {
+            var resp = await Http.PostAsJsonAsync("/api/auth/register", new RegisterRequest { UserName = _registerUser, Password = _registerPwd });
+            if (resp.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                _registerError = "该用户名已注册过";
+                return;
+            }
+            if (!resp.IsSuccessStatusCode)
+            {
+                _registerError = "注册失败，请稍后重试";
+                return;
+            }
+
+            // 注册成功，回到登录界面并预填用户名
+            _user = _registerUser;
+            _pwd = string.Empty;
+            _errorMessage = "注册成功，请登录";
+            CloseRegister();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+            _registerError = "注册时发生错误";
+        }
+    }
+
+    private class RegisterRequest
+    {
+        public string UserName { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+    }
+}

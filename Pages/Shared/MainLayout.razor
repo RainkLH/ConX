@@ -1,0 +1,63 @@
+@inherits LayoutComponentBase
+@inject HttpClient Http
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@attribute [Authorize]
+
+<div class="main-layout">    
+    <div class="sidebar">
+        <nav>
+            <ul style="list-style:none;padding:0;margin:0;">
+                <li><NavLink href="/" Match="NavLinkMatch.All">🖥️ 进程管理</NavLink></li>
+                <li><NavLink href="/terminal" Match="NavLinkMatch.Prefix">⌨️ 终端</NavLink></li>
+            </ul>
+        </nav>
+    </div>
+    <div class="content">  
+        <div class="topbar">
+            <div class="topbar__user">
+                当前用户：@(_userName ?? "未登录")
+            </div>
+            <button class="btn__logout" @onclick="Logout">注销</button>
+        </div>      
+        @Body
+    </div>
+</div>
+
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthStateTask { get; set; } = default!;
+    private string? _userName;
+    private bool _isLoggingOut = false;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var authState = await AuthStateTask;
+        _userName = authState.User.Identity?.IsAuthenticated == true
+            ? authState.User.Identity.Name
+            : "未登录";
+    }
+
+    private async Task Logout()
+    {
+        if (_isLoggingOut) return;
+        _isLoggingOut = true;
+        
+        try 
+        { 
+            // 使用 JavaScript 辅助函数来确保彻底清除 Cookie
+            await JS.InvokeVoidAsync("conx.logout", "/api/auth/logout");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Logout error: {ex.Message}");
+        }
+        finally
+        {
+            // 延迟一小段时间确保 Cookie 被清除，然后刷新页面
+            await Task.Delay(500);
+            Nav.NavigateTo("/Login", forceLoad: true);
+            _isLoggingOut = false;
+        }
+    }
+}
